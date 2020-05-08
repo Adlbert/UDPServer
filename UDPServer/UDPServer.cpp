@@ -68,23 +68,25 @@ bool bufferIsComplete(uint32_t** buff, uint8_t crecvBufindex) {
 	return true;
 }
 
-uint32_t* AddDataToPkt(uint32_t* pktData, uint32_t* buff, uint8_t crecvBufindex) {
+uint32_t* AddDataToPkt(uint32_t* pktData, uint32_t* buff, uint8_t index, uint32_t pktsize) {
 	for (int i = 2; i < 1400; i++) {
-		int index = (i - 1) * (crecvBufindex + 1);
-		pktData[index] = buff[i];
+		int j = i + (index * 1397);
+		if (j < pktsize)
+			pktData[j] = buff[i];
 	}
 	return pktData;
 }
 
-uint32_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex) {
-	uint32_t* pktData = new uint32_t[(crecvBufindex + 1) * 1398];
+uint32_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
+	uint32_t* pktData = new uint32_t[pktsize];
 	int index = 0;
-	if (index < crecvBufindex) {
-		for (int i = 0; i < crecvBufindex; i++) {
-			if (buff[i][1] == index) {
-				pktData == AddDataToPkt(pktData, buff[i], index);
-			}
+	int i = 0;
+	while (index < crecvBufindex + 1) {
+		if (buff[i][1] == index) {
+			pktData == AddDataToPkt(pktData, buff[i], index, pktsize);
+			index++;
 		}
+		i++;
 	}
 	return pktData;
 }
@@ -210,34 +212,37 @@ void main()
 				buffComplete = bufferIsComplete(buff, prevBuffIndex);
 			if (buffComplete) {
 				//BuildPacket
-				uint32_t* pktData = BuildPkt(buff, prevBuffIndex);
+
+				//std::cout << std::endl;
+				//std::cout << "prevBuffIndex: " << prevBuffIndex;
+				//std::cout << std::endl;
+				//for (int j = 0; j < prevBuffIndex + 1; j++) {
+				//	for (int i = 0; i < 10; i++) {
+				//		std::cout << buff[j][i * 40] << " ";
+				//	}
+				//}
+				std::cout << std::endl;
+				uint32_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
 				//Save Screenshot
 				stbi_write_jpg(img_name.c_str(), 8, 6, 4, pktData, 4 * 8);
 				//Debug Frames
 				if (debugFrames) {
 					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
 					for (int i = 0; i < 10; i++) {
-						//std::cout << pktData[i * 40] << " ";
+						std::cout << pktData[i * 40] << " ";
 					}
 					std::cout << std::endl;
 				}
 				//SaveFrame
 				fwrite(pktData, 1, prevBuffIndex * 1398, f);
-				//Delete Buffer
-				delete[] buff;
-				buff = new uint32_t * [buffsize];
-				for (int i = 0; i < buffsize; ++i)
-					buff[i] = new uint32_t[recvBuffsize];
-				cBufindex = 0;
+
 			}
-			if (prevsingle || !buffComplete) {
-				//Delete Buffer
-				delete[] buff;
-				buff = new uint32_t * [buffsize];
-				for (int i = 0; i < buffsize; ++i)
-					buff[i] = new uint32_t[recvBuffsize];
-				cBufindex = 0;
-			}
+			//Delete Buffer
+			delete[] buff;
+			buff = new uint32_t * [buffsize];
+			for (int i = 0; i < buffsize; ++i)
+				buff[i] = new uint32_t[recvBuffsize];
+			cBufindex = 0;
 		}
 
 		//Fill next Buffer
