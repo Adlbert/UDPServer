@@ -185,77 +185,58 @@ void main()
 		uint32_t frameCount = recvbuff[0];
 		uint32_t recvFragnum = recvbuff[1];
 		uint32_t isSingleFlag = recvbuff[2];
+		uint32_t pktsize = recvbuff[3];
 		if (debugFragments) {
 			std::cout << frameCount << "_";
 			std::cout << recvFragnum << "_";
 			std::cout << isSingleFlag << "_";
+			std::cout << pktsize << "_";
 			for (int i = 0; i < 10; i++) {
 				std::cout << recvbuff[i * 70];
 			}
 			std::cout << std::endl;
+			std::cout << "cBufindex: " << cBufindex;
+			std::cout << std::endl;
 		}
+		//Save Previous Frame
+		//Check if buffer is
 		if (recvFragnum == 0 && prevBuffIndex >= 0) {
 			std::string name("saved Frame " + std::to_string(buff[0][0]));
 			std::string img_name("media/screenshots/Frame" + std::to_string(buff[0][0]) + ".jpg");
-			//Save P Frame
 			bool prevsingle = buff[prevBuffIndex][2] == 1;
-			//if (prevsingle) {
-			//	//BuildPackat
-			//	uint32_t* pktData = BuildPkt(buff, prevBuffIndex);
-			//	//Save Screenshot
-			//	stbi_write_jpg(img_name.c_str(), 16, 12, 4, pktData, 4 * 8);
-			//	//Debug Frames
-			//	if (debugFrames) {
-			//		std::cout << std::endl << frameCount << std::endl;
-			//		for (int i = 0; i < 10; i++) {
-			//			std::cout << buff[0][i * 40] << " ";
-			//		}
-			//		std::cout << std::endl;
-			//		for (int i = 0; i < 10; i++) {
-			//			std::cout << pktData[i * 40] << " ";
-			//		}
-			//	}
-			//	//SaveFrame
-			//	fwrite(buff[0], 1, prevBuffIndex * 1400, f);
-			//	//Delete Buffer
-			//	delete[] buff;
-			//	buff = new uint32_t * [buffsize];
-			//	for (int i = 0; i < buffsize; ++i)
-			//		buff[i] = new uint32_t[recvBuffsize];
-			//	cBufindex = 0;
-			//}
-			//Check if buffer is empty or single
-			if (cBufindex != 0 || prevsingle) {
-				//Check if fragments in buffer are complete
-				bool buffComplete = bufferIsComplete(buff, prevBuffIndex);
-				if (prevsingle || buffComplete) {
-					//BuildPacket
-					uint32_t* pktData = BuildPkt(buff, prevBuffIndex);
-					//Save Screenshot
-					stbi_write_jpg(img_name.c_str(), 8, 6, 4, pktData, 4 * 8);
-					//Debug Frames
-					if (debugFrames) {
-						std::cout << std::endl << frameCount << std::endl;
-						for (int i = 0; i < 10; i++) {
-							std::cout << pktData[i * 40] << " ";
-						}
-						//std::cout << std::endl;
-						//for (int i = 0; i < 10; i++) {
-						//	std::cout << buff[[i * 40] << " ";
-						//}
+			//Check if fragments in buffer are complete
+			bool buffComplete = true;
+			if (!prevsingle)
+				buffComplete = bufferIsComplete(buff, prevBuffIndex);
+			if (buffComplete) {
+				//BuildPacket
+				uint32_t* pktData = BuildPkt(buff, prevBuffIndex);
+				//Save Screenshot
+				stbi_write_jpg(img_name.c_str(), 8, 6, 4, pktData, 4 * 8);
+				//Debug Frames
+				if (debugFrames) {
+					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
+					for (int i = 0; i < 10; i++) {
+						//std::cout << pktData[i * 40] << " ";
 					}
-					//SaveFrame
-					fwrite(pktData, 1, prevBuffIndex * 1398, f);
-
+					std::cout << std::endl;
 				}
-				else if (prevsingle || !buffComplete) {
-					//Delete Buffer
-					//delete[] buff;
-					//buff = new uint32_t * [buffsize];
-					//for (int i = 0; i < buffsize; ++i)
-					//	buff[i] = new uint32_t[recvBuffsize];
-					cBufindex = 0;
-				}
+				//SaveFrame
+				fwrite(pktData, 1, prevBuffIndex * 1398, f);
+				//Delete Buffer
+				delete[] buff;
+				buff = new uint32_t * [buffsize];
+				for (int i = 0; i < buffsize; ++i)
+					buff[i] = new uint32_t[recvBuffsize];
+				cBufindex = 0;
+			}
+			if (prevsingle || !buffComplete) {
+				//Delete Buffer
+				delete[] buff;
+				buff = new uint32_t * [buffsize];
+				for (int i = 0; i < buffsize; ++i)
+					buff[i] = new uint32_t[recvBuffsize];
+				cBufindex = 0;
 			}
 		}
 
