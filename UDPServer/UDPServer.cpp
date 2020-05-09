@@ -5,19 +5,75 @@
 #include <sstream>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 #include <libswscale/swscale.h>
 #include "libavcodec/avcodec.h"
+#include "libavutil/frame.h"
+#include "libavutil/imgutils.h"
+#include "libavutil/common.h"
+#include "libavutil/mathematics.h"
+}
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h">
+#include "stb_image/stb_image.h">
 
 #define STBI_MSC_SECURE_CRT
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include "stb_image/stb_image_write.h"
 
 // Include the Winsock library (lib) file
 #pragma comment (lib, "ws2_32.lib")
+
+/*save iamge data as pgm for tests
+*/
+static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
+	char* filename)
+{
+	FILE* f;
+	int i;
+
+	fopen_s(&f, filename, "w");
+	fprintf(f, "P5\n%d %d\n%d\n", xsize, ysize, 255);
+	for (i = 0; i < ysize; i++)
+		fwrite(buf + i * wrap, 1, xsize, f);
+	fclose(f);
+}
+
+/* decode from pkt of frame data
+*/
+static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const char* filename) {
+	char buf[1024];
+	int ret;
+
+	ret = avcodec_send_packet(dec_ctx, pkt);
+	if (ret < 0) {
+		fprintf(stderr, "Error sending a packet for decoding\n");
+		exit(1);
+	}
+
+	while (ret >= 0) {
+		ret = avcodec_receive_frame(dec_ctx, frame);
+		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+			return;
+		else if (ret < 0) {
+			fprintf(stderr, "Error during decoding\n");
+			exit(1);
+		}
+
+		printf("saving frame %3d\n", dec_ctx->frame_number);
+		fflush(stdout);
+
+		/* the picture is allocated by the decoder. no need to
+		   free it */
+		snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.png", filename, dec_ctx->frame_number);
+		std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".png");
+		stbi_write_png(img_name.c_str(), frame->width, frame->height, 1, frame->data[0], frame->linesize[0]);
+	}
+}
 
 int compare(const void* a, const void* b)
 {
@@ -32,35 +88,30 @@ int compare(const void* a, const void* b)
 	return 0;
 }
 
+/*/ Check if an element is missing from the array
+*/
 bool bufferIsComplete(uint32_t** buff, uint8_t crecvBufindex) {
 	uint32_t* fragNums = new uint32_t[crecvBufindex];
 	//store fragNums in new array
 	for (int i = 0; i < crecvBufindex; i++) {
 		fragNums[i] = buff[i][1];
-		//for (int j = 0; j < 1400; j++) {
-		//	std::cout << buff[i][j] << " ";
-		//}
-		//std::cout << std::endl;
 	}
+	//Sort array of fragments accending
 	std::qsort(fragNums, crecvBufindex, sizeof(uint32_t), compare);
-	//for (int i = 0; i < crecvBufindex; i++) {
-	//	std::cout << fragNums[i] << " ";
-	//}
-	//std::cout << std::endl;
+	//Check if first element is 0-Element
 	if (fragNums[0] != 0)
 		return false;
+	//Check if an element is missing
 	for (int i = 0; i < crecvBufindex; i++) {
 		uint32_t x;
 		uint32_t y;
 		if (i == crecvBufindex - 1) {
 			x = fragNums[i] - 1;
 			y = fragNums[i - 1];
-			//std::cout << i << "_" << x << "_" << y << std::endl;
 		}
 		else {
 			x = fragNums[i] + 1;
 			y = fragNums[i + 1];
-			//std::cout << i << "_" << x << "_" << y << std::endl;
 		}
 		if (x != y)
 			return false;
@@ -68,17 +119,21 @@ bool bufferIsComplete(uint32_t** buff, uint8_t crecvBufindex) {
 	return true;
 }
 
-uint32_t* AddDataToPkt(uint32_t* pktData, uint32_t* buff, uint8_t index, uint32_t pktsize) {
-	for (int i = 2; i < 1400; i++) {
-		int j = i + (index * 1397);
+/* add the image data to an uint8_t array without header
+*/
+uint8_t* AddDataToPkt(uint8_t* pktData, uint32_t* buff, uint8_t index, uint32_t pktsize) {
+	for (int i = 4; i < 1400; i++) {
+		int j = (i - 4) + (index * 1396);
 		if (j < pktsize)
 			pktData[j] = buff[i];
 	}
 	return pktData;
 }
 
-uint32_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
-	uint32_t* pktData = new uint32_t[pktsize];
+/* Build the image array from the buffer data
+*/
+uint8_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
+	uint8_t* pktData = new uint8_t[pktsize];
 	int index = 0;
 	int i = 0;
 	while (index < crecvBufindex + 1) {
@@ -87,6 +142,8 @@ uint32_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
 			index++;
 		}
 		i++;
+		if (i > crecvBufindex)
+			i = 0;
 	}
 	return pktData;
 }
@@ -100,10 +157,6 @@ void main()
 		fprintf(stderr, "Could not open %s\n", filename);
 		exit(4);
 	}
-
-	////////////////////////////////////////////////////////////
-	// INITIALIZE WINSOCK
-	////////////////////////////////////////////////////////////
 
 	// Structure to store the WinSock version. This is filled in
 	// on the call to WSAStartup()
@@ -124,10 +177,6 @@ void main()
 		return;
 	}
 
-	////////////////////////////////////////////////////////////
-	// SOCKET CREATION AND BINDING
-	////////////////////////////////////////////////////////////
-
 	// Create a socket, notice that it is a user datagram socket (UDP)
 	SOCKET in = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -144,15 +193,56 @@ void main()
 		return;
 	}
 
-	////////////////////////////////////////////////////////////
-	// MAIN LOOP SETUP AND ENTRY
-	////////////////////////////////////////////////////////////
+	const char* outfilename;
+	const AVCodec* codec;
+	AVCodecContext* c = NULL;
+	AVFrame* frame;
+	AVPacket* pkt;
+
+	outfilename = "test";
+
+	pkt = av_packet_alloc();
+	if (!pkt)
+		exit(1);
+
+	/* find the MPEG-1 video decoder */
+	codec = avcodec_find_decoder(AV_CODEC_ID_MPEG4);
+	if (!codec) {
+		fprintf(stderr, "Codec not found\n");
+		exit(1);
+	}
+
+
+	c = avcodec_alloc_context3(codec);
+	if (!c) {
+		fprintf(stderr, "Could not allocate video codec context\n");
+		exit(1);
+	}
+
+	/* For some codecs, such as msmpeg4 and mpeg4, width and height
+	   MUST be initialized there because this information is not
+	   available in the bitstream. */
+
+	   /* open it */
+	if (avcodec_open2(c, codec, NULL) < 0) {
+		fprintf(stderr, "Could not open codec\n");
+		exit(1);
+	}
+	c->width = 800;
+	c->height = 600;
+
+
+	frame = av_frame_alloc();
+	if (!frame) {
+		fprintf(stderr, "Could not allocate video frame\n");
+		exit(1);
+	}
 
 	sockaddr_in client; // Use to hold the client information (port / ip address)
 	int clientLength = sizeof(client); // The size of the client information
 
 	bool debugFragments = false;
-	bool debugFrames = true;
+	bool debugFrames = false;
 
 	int cBufindex = 0;
 	int buffsize = 20;
@@ -201,10 +291,8 @@ void main()
 			std::cout << std::endl;
 		}
 		//Save Previous Frame
-		//Check if buffer is
+		//Check if buffer is empty
 		if (recvFragnum == 0 && prevBuffIndex >= 0) {
-			std::string name("saved Frame " + std::to_string(buff[0][0]));
-			std::string img_name("media/screenshots/Frame" + std::to_string(buff[0][0]) + ".jpg");
 			bool prevsingle = buff[prevBuffIndex][2] == 1;
 			//Check if fragments in buffer are complete
 			bool buffComplete = true;
@@ -212,19 +300,11 @@ void main()
 				buffComplete = bufferIsComplete(buff, prevBuffIndex);
 			if (buffComplete) {
 				//BuildPacket
-
-				//std::cout << std::endl;
-				//std::cout << "prevBuffIndex: " << prevBuffIndex;
-				//std::cout << std::endl;
-				//for (int j = 0; j < prevBuffIndex + 1; j++) {
-				//	for (int i = 0; i < 10; i++) {
-				//		std::cout << buff[j][i * 40] << " ";
-				//	}
-				//}
-				std::cout << std::endl;
-				uint32_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
+				uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
 				//Save Screenshot
-				stbi_write_jpg(img_name.c_str(), 8, 6, 4, pktData, 4 * 8);
+				pkt->data = pktData;
+				pkt->size = buff[0][3];
+				decode(c, frame, pkt, outfilename);
 				//Debug Frames
 				if (debugFrames) {
 					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
@@ -234,7 +314,7 @@ void main()
 					std::cout << std::endl;
 				}
 				//SaveFrame
-				fwrite(pktData, 1, prevBuffIndex * 1398, f);
+				fwrite(pktData, 1, buff[0][3], f);
 
 			}
 			//Delete Buffer
@@ -256,6 +336,13 @@ void main()
 		else
 			cBufindex = 0;
 	}
+
+	/* flush the decoder */
+	decode(c, frame, NULL, outfilename);
+
+	avcodec_free_context(&c);
+	av_frame_free(&frame);
+	av_packet_free(&pkt);
 
 	// Close socket
 	closesocket(in);
