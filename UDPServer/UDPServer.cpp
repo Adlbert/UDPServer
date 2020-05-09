@@ -313,9 +313,6 @@ void main()
 					}
 					std::cout << std::endl;
 				}
-				//SaveFrame
-				fwrite(pktData, 1, buff[0][3], f);
-
 			}
 			//Delete Buffer
 			delete[] buff;
