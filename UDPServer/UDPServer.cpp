@@ -27,11 +27,12 @@ extern "C" {
 
 // Include the Winsock library (lib) file
 #pragma comment (lib, "ws2_32.lib")
+#pragma warning(disable : 4996)
 
 /*save iamge data as pgm for tests
 */
 static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
-	char* filename)
+	const char* filename)
 {
 	FILE* f;
 	int i;
@@ -45,7 +46,8 @@ static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
 
 /* decode from pkt of frame data
 */
-static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const char* filename) {
+static void decodeToImage(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
+	AVFrame* avFrameYUV, AVFrame* avFrameRGB, AVPacket* pkt, const char* filename) {
 	char buf[1024];
 	int ret;
 
@@ -56,7 +58,7 @@ static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const
 	}
 
 	while (ret >= 0) {
-		ret = avcodec_receive_frame(dec_ctx, frame);
+		ret = avcodec_receive_frame(dec_ctx, avFrameYUV);
 		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
 			return;
 		else if (ret < 0) {
@@ -67,12 +69,48 @@ static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const
 		printf("saving frame %3d\n", dec_ctx->frame_number);
 		fflush(stdout);
 
+		img_convert_ctx = sws_getContext(
+			avFrameYUV->width, avFrameYUV->height, dec_ctx->pix_fmt, avFrameYUV->width, avFrameYUV->height,
+			AVPixelFormat::AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+		if (!img_convert_ctx) {
+			fprintf(stderr, "Could not allocate image convert context\n");
+			exit(1);
+		}
+		ret = av_image_alloc(avFrameRGB->data, avFrameRGB->linesize, avFrameYUV->width, avFrameYUV->height,
+			AVPixelFormat::AV_PIX_FMT_RGB24, 32);
+		if (ret < 0) {
+			fprintf(stderr, "Could not allocate raw picture buffer\n");
+			exit(6);
+		}
+
+		int out = sws_scale(img_convert_ctx, avFrameYUV->data, avFrameYUV->linesize, 0, avFrameYUV->height,
+			avFrameRGB->data, avFrameRGB->linesize);
+		if (!out) {
+			AVERROR(ENOMEM);
+			exit(1);
+		}
+
 		/* the picture is allocated by the decoder. no need to
 		   free it */
-		snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.png", filename, dec_ctx->frame_number);
-		std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".png");
-		stbi_write_png(img_name.c_str(), frame->width, frame->height, 1, frame->data[0], frame->linesize[0]);
+		snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.pgm", filename, dec_ctx->frame_number);
+		std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".jpg");
+		//stbi_write_png(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], avFrameRGB->linesize[0]);
+		stbi_write_jpg(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], 3 * avFrameYUV->width);
+		//pgm_save(avFrameRGB->data[0], avFrameRGB->linesize[0], avFrameYUV->width, avFrameYUV->height, filename);
 	}
+}
+
+static void decodeToVideo(AVPacket* pkt, const char* filename, int framenumber, FILE* f, bool debugframe) {
+	std::string name("media/screenshots/frame_decode" + std::to_string(framenumber) + ".jpg");
+	if (debugframe) {
+		std::cout << std::endl << framenumber << "_" << pkt->size << std::endl;
+		for (int i = 0; i < 10; i++) {
+			std::cout << ntohl(htonl(pkt->data[i * 40])) << " ";
+		}
+		std::cout << std::endl;
+	}
+	fwrite(pkt->data, 1, pkt->size, f);
+	av_free_packet(pkt);
 }
 
 int compare(const void* a, const void* b)
@@ -150,7 +188,7 @@ uint8_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
 
 void main()
 {
-	const char* filename = "D:\\Projects\\UDPServer\\MPG1Video_highbitrate.mpg";
+	const char* filename = "D:\\Projects\\UDPServer\\MPG4Video_highbitrate.mpg";
 	FILE* f;
 	fopen_s(&f, filename, "wb");
 	if (!f) {
@@ -194,10 +232,14 @@ void main()
 	}
 
 	const char* outfilename;
-	const AVCodec* codec;
-	AVCodecContext* c = NULL;
-	AVFrame* frame;
+	const AVCodec* image_codec;
+	AVCodecContext* image_ctx = NULL;
+	SwsContext* img_convert_ctx = NULL;
+	AVFrame* avFrameYUV;
+	AVFrame* avFrameRGB;
 	AVPacket* pkt;
+	int extentWidth = 800;
+	int extentHeight = 600;
 
 	outfilename = "test";
 
@@ -205,38 +247,70 @@ void main()
 	if (!pkt)
 		exit(1);
 
-	/* find the MPEG-1 video decoder */
-	codec = avcodec_find_decoder(AV_CODEC_ID_MPEG4);
-	if (!codec) {
+	/* find the MPEG-4 video decoder */
+	image_codec = avcodec_find_decoder(AV_CODEC_ID_MPEG4);
+	if (!image_codec) {
 		fprintf(stderr, "Codec not found\n");
 		exit(1);
 	}
 
 
-	c = avcodec_alloc_context3(codec);
-	if (!c) {
+	/*Allocate the image context*/
+	image_ctx = avcodec_alloc_context3(image_codec);
+	if (!image_ctx) {
 		fprintf(stderr, "Could not allocate video codec context\n");
 		exit(1);
 	}
 
+	/*
+	* Image Context
+	*/
 	/* For some codecs, such as msmpeg4 and mpeg4, width and height
 	   MUST be initialized there because this information is not
 	   available in the bitstream. */
 
 	   /* open it */
-	if (avcodec_open2(c, codec, NULL) < 0) {
+	if (avcodec_open2(image_ctx, image_codec, NULL) < 0) {
 		fprintf(stderr, "Could not open codec\n");
 		exit(1);
 	}
-	c->width = 800;
-	c->height = 600;
+	image_ctx->width = 800;
+	image_ctx->height = 600;
+	image_ctx->pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+
+	/*
+	* /Image Context
+	*/
 
 
-	frame = av_frame_alloc();
-	if (!frame) {
+
+	avFrameYUV = av_frame_alloc();
+	if (!avFrameYUV) {
 		fprintf(stderr, "Could not allocate video frame\n");
 		exit(1);
 	}
+
+	//Maybe to use if video does not fit
+	//avFrameYUV->format = video_ctx->pix_fmt;
+	//avFrameYUV->width = video_ctx->width;
+	//avFrameYUV->height = video_ctx->height;
+
+	avFrameRGB = av_frame_alloc();
+	if (!avFrameRGB) {
+		fprintf(stderr, "Could not allocate picture frame\n");
+		exit(1);
+	}
+
+	//Maybe to use if video does not fit
+	//avFrameRGB->format = video_ctx->pix_fmt;
+	//avFrameRGB->width = video_ctx->width;
+	//avFrameRGB->height = video_ctx->height;
+
+
+
+	/*
+	* Receiving
+	*/
 
 	sockaddr_in client; // Use to hold the client information (port / ip address)
 	int clientLength = sizeof(client); // The size of the client information
@@ -304,7 +378,8 @@ void main()
 				//Save Screenshot
 				pkt->data = pktData;
 				pkt->size = buff[0][3];
-				decode(c, frame, pkt, outfilename);
+				//decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
+				decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
 				//Debug Frames
 				if (debugFrames) {
 					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
@@ -335,10 +410,11 @@ void main()
 	}
 
 	/* flush the decoder */
-	decode(c, frame, NULL, outfilename);
+	decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, NULL, outfilename);
 
-	avcodec_free_context(&c);
-	av_frame_free(&frame);
+	avcodec_free_context(&image_ctx);
+	av_frame_free(&avFrameYUV);
+	av_frame_free(&avFrameRGB);
 	av_packet_free(&pkt);
 
 	// Close socket
