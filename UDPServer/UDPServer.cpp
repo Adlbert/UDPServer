@@ -16,6 +16,8 @@ extern "C" {
 #include "libavutil/imgutils.h"
 #include "libavutil/common.h"
 #include "libavutil/mathematics.h"
+#include <SDL2/SDL.h>
+#undef main
 }
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -186,10 +188,61 @@ uint8_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
 	return pktData;
 }
 
-void main()
+//Screen dimension constants
+const int SCREEN_WIDTH = 640;
+const int SCREEN_HEIGHT = 480;
+
+const char* outfilename;
+const AVCodec* image_codec;
+AVCodecContext* image_ctx = NULL;
+SwsContext* img_convert_ctx = NULL;
+AVFrame* avFrameYUV;
+AVFrame* avFrameRGB;
+AVPacket* pkt;
+SOCKET in;
+FILE* f;
+const char* filename = "\MPG4Video_highbitrate.mpg";
+
+//The window we'll be rendering to
+SDL_Window* gWindow = NULL;
+
+//The surface contained by the window
+SDL_Surface* gScreenSurface = NULL;
+
+//The image we will load and show on the screen
+SDL_Surface* gXOut = NULL;
+
+bool init()
 {
-	const char* filename = "D:\\Projects\\UDPServer\\MPG4Video_highbitrate.mpg";
-	FILE* f;
+	//Initialization flag
+	bool success = true;
+
+	//Initialize SDL
+	if (SDL_Init(SDL_INIT_VIDEO) < 0)
+	{
+		printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+		success = false;
+	}
+	else
+	{
+		//Create window
+		gWindow = SDL_CreateWindow("SDL Tutorial", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+		if (gWindow == NULL)
+		{
+			printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
+			success = false;
+		}
+		else
+		{
+			//Get window surface
+			gScreenSurface = SDL_GetWindowSurface(gWindow);
+		}
+	}
+
+	return success;
+}
+
+bool initClient() {
 	fopen_s(&f, filename, "wb");
 	if (!f) {
 		fprintf(stderr, "Could not open %s\n", filename);
@@ -212,11 +265,11 @@ void main()
 	{
 		// Not ok! Get out quickly
 		std::cout << "Can't start Winsock! " << wsOk;
-		return;
+		return false;
 	}
 
 	// Create a socket, notice that it is a user datagram socket (UDP)
-	SOCKET in = socket(AF_INET, SOCK_DGRAM, 0);
+	in = socket(AF_INET, SOCK_DGRAM, 0);
 
 	// Create a server hint structure for the server
 	sockaddr_in serverHint;
@@ -228,16 +281,10 @@ void main()
 	if (bind(in, (sockaddr*)&serverHint, sizeof(serverHint)) == SOCKET_ERROR)
 	{
 		std::cout << "Can't bind socket! " << WSAGetLastError() << std::endl;
-		return;
+		return false;
 	}
 
-	const char* outfilename;
-	const AVCodec* image_codec;
-	AVCodecContext* image_ctx = NULL;
-	SwsContext* img_convert_ctx = NULL;
-	AVFrame* avFrameYUV;
-	AVFrame* avFrameRGB;
-	AVPacket* pkt;
+
 	int extentWidth = 800;
 	int extentHeight = 600;
 
@@ -278,10 +325,6 @@ void main()
 	image_ctx->height = 600;
 	image_ctx->pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
 
-	/*
-	* /Image Context
-	*/
-
 
 
 	avFrameYUV = av_frame_alloc();
@@ -305,120 +348,190 @@ void main()
 	//avFrameRGB->format = video_ctx->pix_fmt;
 	//avFrameRGB->width = video_ctx->width;
 	//avFrameRGB->height = video_ctx->height;
+	return true;
+}
 
+bool loadMedia()
+{
+	//Loading success flag
+	bool success = true;
 
-
-	/*
-	* Receiving
-	*/
-
-	sockaddr_in client; // Use to hold the client information (port / ip address)
-	int clientLength = sizeof(client); // The size of the client information
-
-	bool debugFragments = false;
-	bool debugFrames = false;
-
-	int cBufindex = 0;
-	int buffsize = 20;
-	int recvBuffsize = 1400;
-	uint32_t recvbuff[1400];
-	uint32_t** buff = new uint32_t * [buffsize];
-	for (int i = 0; i < buffsize; ++i)
-		buff[i] = new uint32_t[recvBuffsize];
-
-	// Enter a loop
-	while (true)
+	//Load splash image
+	gXOut = SDL_LoadBMP("\hello_world.bmp");
+	if (gXOut == NULL)
 	{
-		ZeroMemory(&client, clientLength); // Clear the client structure
-		ZeroMemory(recvbuff, recvBuffsize); // Clear the receive buffer
-
-		// Wait for message
-		int bytesIn = recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
-		if (bytesIn == SOCKET_ERROR)
-		{
-			std::cout << "Error receiving from client " << WSAGetLastError() << std::endl;
-			continue;
-		}
-
-		// Display message and client info
-		char clientIp[256]; // Create enough space to convert the address byte array
-		ZeroMemory(clientIp, 256); // to string of characters
-
-		// Convert from byte array to chars
-		inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
-
-		int prevBuffIndex = cBufindex - 1;
-		uint32_t frameCount = recvbuff[0];
-		uint32_t recvFragnum = recvbuff[1];
-		uint32_t isSingleFlag = recvbuff[2];
-		uint32_t pktsize = recvbuff[3];
-		if (debugFragments) {
-			std::cout << frameCount << "_";
-			std::cout << recvFragnum << "_";
-			std::cout << isSingleFlag << "_";
-			std::cout << pktsize << "_";
-			for (int i = 0; i < 10; i++) {
-				std::cout << recvbuff[i * 70];
-			}
-			std::cout << std::endl;
-			std::cout << "cBufindex: " << cBufindex;
-			std::cout << std::endl;
-		}
-		//Save Previous Frame
-		//Check if buffer is empty
-		if (recvFragnum == 0 && prevBuffIndex >= 0) {
-			bool prevsingle = buff[prevBuffIndex][2] == 1;
-			//Check if fragments in buffer are complete
-			bool buffComplete = true;
-			if (!prevsingle)
-				buffComplete = bufferIsComplete(buff, prevBuffIndex);
-			if (buffComplete) {
-				//BuildPacket
-				uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
-				//Save Screenshot
-				pkt->data = pktData;
-				pkt->size = buff[0][3];
-				//decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
-				decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
-				//Debug Frames
-				if (debugFrames) {
-					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
-					for (int i = 0; i < 10; i++) {
-						std::cout << pktData[i * 40] << " ";
-					}
-					std::cout << std::endl;
-				}
-			}
-			//Delete Buffer
-			delete[] buff;
-			buff = new uint32_t * [buffsize];
-			for (int i = 0; i < buffsize; ++i)
-				buff[i] = new uint32_t[recvBuffsize];
-			cBufindex = 0;
-		}
-
-		//Fill next Buffer
-		for (int i = 0; i < recvBuffsize; i++) {
-			buff[cBufindex][i] = recvbuff[i];
-		}
-
-		//Increment Index
-		if (cBufindex < buffsize - 1)
-			cBufindex++;
-		else
-			cBufindex = 0;
+		printf("Unable to load image %s! SDL Error: %s\n", "\hello_world.bmp", SDL_GetError());
+		success = false;
 	}
 
-	/* flush the decoder */
-	decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, NULL, outfilename);
+	return success;
+}
 
-	avcodec_free_context(&image_ctx);
-	av_frame_free(&avFrameYUV);
-	av_frame_free(&avFrameRGB);
-	av_packet_free(&pkt);
+void close()
+{
+	//Deallocate surface
+	SDL_FreeSurface(gXOut);
+	gXOut = NULL;
 
-	// Close socket
-	closesocket(in);
+	//Destroy window
+	SDL_DestroyWindow(gWindow);
+	gWindow = NULL;
+
+	//Quit SDL subsystems
+	SDL_Quit();
+}
+
+void main()
+{
+	initClient();
+
+	//Start up SDL and create window
+	if (!init())
+	{
+		printf("Failed to initialize!\n");
+	}
+	else
+	{
+		//Load media
+		if (!loadMedia())
+		{
+			printf("Failed to load media!\n");
+		}
+		else
+		{
+			//Main loop flag
+			bool quit = false;
+
+			//Event handler
+			SDL_Event e;
+
+			sockaddr_in client; // Use to hold the client information (port / ip address)
+			int clientLength = sizeof(client); // The size of the client information
+
+			bool debugFragments = false;
+			bool debugFrames = true;
+
+			int cBufindex = 0;
+			int buffsize = 20;
+			int recvBuffsize = 1400;
+			uint32_t recvbuff[1400];
+			uint32_t** buff = new uint32_t * [buffsize];
+			for (int i = 0; i < buffsize; ++i)
+				buff[i] = new uint32_t[recvBuffsize];
+
+			// Enter a loop
+			while (!quit)
+			{
+				ZeroMemory(&client, clientLength); // Clear the client structure
+				ZeroMemory(recvbuff, recvBuffsize); // Clear the receive buffer
+
+				// Wait for message
+				int bytesIn = recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
+				if (bytesIn == SOCKET_ERROR)
+				{
+					std::cout << "Error receiving from client " << WSAGetLastError() << std::endl;
+					continue;
+				}
+
+				// Display message and client info
+				char clientIp[256]; // Create enough space to convert the address byte array
+				ZeroMemory(clientIp, 256); // to string of characters
+
+				// Convert from byte array to chars
+				inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
+
+				int prevBuffIndex = cBufindex - 1;
+				uint32_t frameCount = recvbuff[0];
+				uint32_t recvFragnum = recvbuff[1];
+				uint32_t isSingleFlag = recvbuff[2];
+				uint32_t pktsize = recvbuff[3];
+				if (debugFragments) {
+					std::cout << frameCount << "_";
+					std::cout << recvFragnum << "_";
+					std::cout << isSingleFlag << "_";
+					std::cout << pktsize << "_";
+					for (int i = 0; i < 10; i++) {
+						std::cout << recvbuff[i * 70];
+					}
+					std::cout << std::endl;
+					std::cout << "cBufindex: " << cBufindex;
+					std::cout << std::endl;
+				}
+				//Save Previous Frame
+				//Check if buffer is empty
+				if (recvFragnum == 0 && prevBuffIndex >= 0) {
+					bool prevsingle = buff[prevBuffIndex][2] == 1;
+					//Check if fragments in buffer are complete
+					bool buffComplete = true;
+					if (!prevsingle)
+						buffComplete = bufferIsComplete(buff, prevBuffIndex);
+					if (buffComplete) {
+						//BuildPacket
+						uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
+						//Save Screenshot
+						pkt->data = pktData;
+						pkt->size = buff[0][3];
+						//decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
+						decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
+						//Debug Frames
+						if (debugFrames) {
+							std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
+							for (int i = 0; i < 10; i++) {
+								std::cout << pktData[i * 40] << " ";
+							}
+							std::cout << std::endl;
+						}
+					}
+					//Delete Buffer
+					delete[] buff;
+					buff = new uint32_t * [buffsize];
+					for (int i = 0; i < buffsize; ++i)
+						buff[i] = new uint32_t[recvBuffsize];
+					cBufindex = 0;
+				}
+
+				//Fill next Buffer	
+				for (int i = 0; i < recvBuffsize; i++) {
+					buff[cBufindex][i] = recvbuff[i];
+				}
+
+				//Increment Index
+				if (cBufindex < buffsize - 1)
+					cBufindex++;
+				else
+					cBufindex = 0;
+
+				//Handle events on queue
+				while (SDL_PollEvent(&e) != 0)
+				{
+					//User requests quit
+					if (e.type == SDL_QUIT)
+					{
+						quit = true;
+					}
+				}
+
+				//Apply the image
+				SDL_BlitSurface(gXOut, NULL, gScreenSurface, NULL);
+
+				//Update the surface
+				SDL_UpdateWindowSurface(gWindow);
+			}
+
+
+
+			/* flush the decoder */
+			//decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, NULL, outfilename);
+
+			avcodec_free_context(&image_ctx);
+			av_frame_free(&avFrameYUV);
+			av_frame_free(&avFrameRGB);
+			av_packet_free(&pkt);
+
+			// Close socket
+			closesocket(in);
+		}
+	}
 
 	// Shutdown winsock
 	WSACleanup();
