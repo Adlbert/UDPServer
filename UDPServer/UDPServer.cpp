@@ -43,17 +43,25 @@ enum KeyPressSurfaces
 	KEY_PRESS_SURFACE_TOTAL
 };
 
+//Screen dimension constants
+const int SCREEN_WIDTH = 640;
+const int SCREEN_HEIGHT = 480;
+
+const char* outfilename;
+const AVCodec* image_codec;
+AVCodecContext* image_ctx = NULL;
+SwsContext* img_convert_ctx = NULL;
+AVFrame* avFrameYUV;
+AVFrame* avFrameRGB;
+AVPacket* pkt;
+SOCKET in;
+FILE* f;
+const char* filename = "\MPG4Video_highbitrate.mpg";
+
 //The window we'll be rendering to
 SDL_Window* gWindow = NULL;
 
-//The surface contained by the window
 SDL_Surface* gScreenSurface = NULL;
-
-//The images that correspond to a keypress
-SDL_Surface* gKeyPressSurfaces[KEY_PRESS_SURFACE_TOTAL];
-
-//Current displayed image
-SDL_Surface* gCurrentSurface = NULL;
 
 //The window renderer
 SDL_Renderer* gRenderer = NULL;
@@ -79,7 +87,7 @@ static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
 /* decode from pkt of frame data
 */
 static int decodeToImage(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
-	AVFrame* avFrameYUV, AVFrame* avFrameRGB, AVPacket* pkt, const char* filename) {
+	AVFrame* avFrameYUV, AVFrame* avFrameRGB, AVPacket* pkt, const char* filename, bool save) {
 	char buf[1024];
 	int ret;
 
@@ -100,41 +108,42 @@ static int decodeToImage(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
 
 		SDL_Texture* bmp = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING, avFrameYUV->width, avFrameYUV->height);
 		int ret = SDL_UpdateYUVTexture(bmp, NULL, avFrameYUV->data[0], avFrameYUV->linesize[0], avFrameYUV->data[1], avFrameYUV->linesize[1], avFrameYUV->data[2], avFrameYUV->linesize[2]);
-		std::cout << ret << std::endl;
-			gTexture = bmp;
+		gTexture = bmp;
 
-		//printf("saving frame %3d\n", dec_ctx->frame_number);
-		//fflush(stdout);
+		if (save) {
+			printf("saving frame %3d\n", dec_ctx->frame_number);
+			fflush(stdout);
 
-		//img_convert_ctx = sws_getContext(
-		//	avFrameYUV->width, avFrameYUV->height, dec_ctx->pix_fmt, avFrameYUV->width, avFrameYUV->height,
-		//	AVPixelFormat::AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
-		//if (!img_convert_ctx) {
-		//	fprintf(stderr, "Could not allocate image convert context\n");
-		//	exit(1);
-		//}
-		//ret = av_image_alloc(avFrameRGB->data, avFrameRGB->linesize, avFrameYUV->width, avFrameYUV->height,
-		//	AVPixelFormat::AV_PIX_FMT_RGB24, 32);
-		//if (ret < 0) {
-		//	fprintf(stderr, "Could not allocate raw picture buffer\n");
-		//	exit(6);
-		//}
+			img_convert_ctx = sws_getContext(
+				avFrameYUV->width, avFrameYUV->height, dec_ctx->pix_fmt, avFrameYUV->width, avFrameYUV->height,
+				AVPixelFormat::AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+			if (!img_convert_ctx) {
+				fprintf(stderr, "Could not allocate image convert context\n");
+				exit(1);
+			}
+			ret = av_image_alloc(avFrameRGB->data, avFrameRGB->linesize, avFrameYUV->width, avFrameYUV->height,
+				AVPixelFormat::AV_PIX_FMT_RGB24, 32);
+			if (ret < 0) {
+				fprintf(stderr, "Could not allocate raw picture buffer\n");
+				exit(6);
+			}
 
-		//int out = sws_scale(img_convert_ctx, avFrameYUV->data, avFrameYUV->linesize, 0, avFrameYUV->height,
-		//	avFrameRGB->data, avFrameRGB->linesize);
-		//if (!out) {
-		//	AVERROR(ENOMEM);
-		//	exit(1);
-		//}
+			int out = sws_scale(img_convert_ctx, avFrameYUV->data, avFrameYUV->linesize, 0, avFrameYUV->height,
+				avFrameRGB->data, avFrameRGB->linesize);
+			if (!out) {
+				AVERROR(ENOMEM);
+				exit(1);
+			}
 
 
-		/* the picture is allocated by the decoder. no need to
-		   free it */
-		   //snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.pgm", filename, dec_ctx->frame_number);
-		   //std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".png");
-		   //stbi_write_png(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], avFrameRGB->linesize[0]);
-		   //stbi_write_jpg(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], 3 * avFrameYUV->width);
-		   //pgm_save(avFrameRGB->data[0], avFrameRGB->linesize[0], avFrameYUV->width, avFrameYUV->height, filename);
+			/* the picture is allocated by the decoder. no need to
+			   free it */
+			snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.pgm", filename, dec_ctx->frame_number);
+			std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".png");
+			stbi_write_png(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], avFrameRGB->linesize[0]);
+			stbi_write_jpg(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], 3 * avFrameYUV->width);
+			pgm_save(avFrameRGB->data[0], avFrameRGB->linesize[0], avFrameYUV->width, avFrameYUV->height, filename);
+		}
 		return 0;
 	}
 	return -1;
@@ -226,21 +235,6 @@ uint8_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
 	return pktData;
 }
 
-//Screen dimension constants
-const int SCREEN_WIDTH = 640;
-const int SCREEN_HEIGHT = 480;
-
-const char* outfilename;
-const AVCodec* image_codec;
-AVCodecContext* image_ctx = NULL;
-SwsContext* img_convert_ctx = NULL;
-AVFrame* avFrameYUV;
-AVFrame* avFrameRGB;
-AVPacket* pkt;
-SOCKET in;
-FILE* f;
-const char* filename = "\MPG4Video_highbitrate.mpg";
-
 bool init()
 {
 	//Initialization flag
@@ -254,19 +248,6 @@ bool init()
 	}
 	else
 	{
-		////Create window
-		//gWindow = SDL_CreateWindow("SDL Tutorial", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
-		//if (gWindow == NULL)
-		//{
-		//	printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
-		//	success = false;
-		//}
-		//else
-		//{
-		//	//Get window surface
-		//	gScreenSurface = SDL_GetWindowSurface(gWindow);
-		//}
-
 		//Create window
 		gWindow = SDL_CreateWindow("SDL Tutorial", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
 		if (gWindow == NULL)
@@ -440,70 +421,6 @@ SDL_Texture* loadTextureFromFile(std::string path)
 	return newTexture;
 }
 
-SDL_Texture* loadTexture(AVFrame* avFrame, AVPixelFormat pix_fmt, int widht, int height)
-{
-
-	//The final textur#e
-	SDL_Texture* newTexture = NULL;
-	int size = avpicture_get_size(pix_fmt, widht, height);
-	unsigned char* buffer = new unsigned char[size];
-	int ret = avpicture_layout((AVPicture*)avFrame, pix_fmt, widht, height, buffer, size);
-	if (!ret) {
-		printf("Unable to load frame %s!avpicture_layout Error\n", avFrame->coded_picture_number);
-	}
-	else {
-		stbi_write_png("test.png", widht, height, 3, avFrame->data[0], avFrame->linesize[0]);
-		SDL_RWops* rw = SDL_RWFromMem(buffer, size);
-		SDL_Surface* loadedSurface = IMG_Load_RW(rw, 1);
-		if (loadedSurface == NULL)
-		{
-			printf("Unable to load frame %s! SDL_image Error: %s\n", avFrame->coded_picture_number, IMG_GetError());
-		}
-		else
-		{
-			//Create texture from surface pixels
-			newTexture = SDL_CreateTextureFromSurface(gRenderer, loadedSurface);
-			if (newTexture == NULL)
-			{
-				printf("Unable to create texture from frame %s! SDL Error: %s\n", avFrame->coded_picture_number, SDL_GetError());
-			}
-
-			//Get rid of old loaded surface
-			SDL_FreeSurface(loadedSurface);
-		}
-	}
-	return newTexture;
-}
-
-SDL_Surface* loadSurface(std::string path)
-{
-	//The final optimized image
-	SDL_Surface* optimizedSurface = NULL;
-
-	//Load image at specified path
-	SDL_Surface* loadedSurface = SDL_LoadBMP(path.c_str());
-	if (loadedSurface == NULL)
-	{
-		printf("Unable to load image %s! SDL Error: %s\n", path.c_str(), SDL_GetError());
-	}
-
-	else
-	{
-		//Convert surface to screen format
-		optimizedSurface = SDL_ConvertSurface(loadedSurface, gScreenSurface->format, 0);
-		if (optimizedSurface == NULL)
-		{
-			printf("Unable to optimize image %s! SDL Error: %s\n", path.c_str(), SDL_GetError());
-		}
-
-		//Get rid of old loaded surface
-		SDL_FreeSurface(loadedSurface);
-	}
-
-	return optimizedSurface;
-}
-
-
 bool loadMedia()
 {
 	//Loading success flag
@@ -517,46 +434,6 @@ bool loadMedia()
 		success = false;
 	}
 
-	//Load default surface
-	gKeyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT] = loadSurface("press.bmp");
-	if (gKeyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT] == NULL)
-	{
-		printf("Failed to load default image!\n");
-		success = false;
-	}
-
-	//Load up surface
-	gKeyPressSurfaces[KEY_PRESS_SURFACE_UP] = loadSurface("up.bmp");
-	if (gKeyPressSurfaces[KEY_PRESS_SURFACE_UP] == NULL)
-	{
-		printf("Failed to load up image!\n");
-		success = false;
-	}
-
-	//Load down surface
-	gKeyPressSurfaces[KEY_PRESS_SURFACE_DOWN] = loadSurface("down.bmp");
-	if (gKeyPressSurfaces[KEY_PRESS_SURFACE_DOWN] == NULL)
-	{
-		printf("Failed to load down image!\n");
-		success = false;
-	}
-
-	//Load left surface
-	gKeyPressSurfaces[KEY_PRESS_SURFACE_LEFT] = loadSurface("left.bmp");
-	if (gKeyPressSurfaces[KEY_PRESS_SURFACE_LEFT] == NULL)
-	{
-		printf("Failed to load left image!\n");
-		success = false;
-	}
-
-	//Load right surface
-	gKeyPressSurfaces[KEY_PRESS_SURFACE_RIGHT] = loadSurface("right.bmp");
-	if (gKeyPressSurfaces[KEY_PRESS_SURFACE_RIGHT] == NULL)
-	{
-		printf("Failed to load right image!\n");
-		success = false;
-	}
-
 	return success;
 }
 
@@ -565,10 +442,6 @@ void close()
 	//Free loaded image
 	SDL_DestroyTexture(gTexture);
 	gTexture = NULL;
-
-	//Deallocate surface
-	SDL_FreeSurface(gCurrentSurface);
-	gCurrentSurface = NULL;
 
 	//Destroy window
 	SDL_DestroyRenderer(gRenderer);
@@ -604,9 +477,6 @@ void main()
 
 			//Event handler
 			SDL_Event e;
-
-			//Set default current surface
-			gCurrentSurface = gKeyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT];
 
 			sockaddr_in client; // Use to hold the client information (port / ip address)
 			int clientLength = sizeof(client); // The size of the client information
@@ -674,10 +544,8 @@ void main()
 						//Save Screenshot
 						pkt->data = pktData;
 						pkt->size = buff[0][3];
-						int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
+						int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename, false);
 						//decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
-						//if (ret == 0)
-						//	gTexture = loadTexture(avFrameRGB, AVPixelFormat::AV_PIX_FMT_RGB24, 800, 600);
 						//Debug Frames
 						if (debugFrames) {
 							std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
@@ -721,35 +589,22 @@ void main()
 						switch (e.key.keysym.sym)
 						{
 						case SDLK_UP:
-							gCurrentSurface = gKeyPressSurfaces[KEY_PRESS_SURFACE_UP];
 							break;
 
 						case SDLK_DOWN:
-							gCurrentSurface = gKeyPressSurfaces[KEY_PRESS_SURFACE_DOWN];
 							break;
 
 						case SDLK_LEFT:
-							gCurrentSurface = gKeyPressSurfaces[KEY_PRESS_SURFACE_LEFT];
 							break;
 
 						case SDLK_RIGHT:
-							gCurrentSurface = gKeyPressSurfaces[KEY_PRESS_SURFACE_RIGHT];
 							break;
 
 						default:
-							gCurrentSurface = gKeyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT];
 							break;
 						}
 					}
 				}
-
-				//Apply the image stretched
-				SDL_Rect stretchRect;
-				stretchRect.x = 0;
-				stretchRect.y = 0;
-				stretchRect.w = SCREEN_WIDTH;
-				stretchRect.h = SCREEN_HEIGHT;
-				SDL_BlitScaled(gCurrentSurface, NULL, gScreenSurface, &stretchRect);
 
 				//Clear screen
 				SDL_RenderClear(gRenderer);
@@ -758,11 +613,8 @@ void main()
 				SDL_RenderCopy(gRenderer, gTexture, NULL, NULL);
 				//Apply the current image
 
-								//Update screen
+				//Update screen
 				SDL_RenderPresent(gRenderer);
-
-				//Update the surface
-				//SDL_UpdateWindowSurface(gWindow);
 			}
 
 
