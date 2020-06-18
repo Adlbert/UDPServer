@@ -481,9 +481,100 @@ void close()
 	SDL_Quit();
 }
 
-int recvtask(uint32_t* recvbuff, int recvBuffsize, sockaddr_in client, int clientLength)
+int recvtask()
 {
-	return recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
+	sockaddr_in client; // Use to hold the client information (port / ip address)
+	int clientLength = sizeof(client); // The size of the client information
+
+	bool debugFragments = false;
+	bool debugFrames = false;
+
+	int cBufindex = 0;
+	int buffsize = 20;
+	int recvBuffsize = 1400;
+	uint32_t recvbuff[1400];
+	uint32_t** buff = new uint32_t * [buffsize];
+	for (int i = 0; i < buffsize; ++i)
+		buff[i] = new uint32_t[recvBuffsize];
+	do {
+		ZeroMemory(&client, clientLength); // Clear the client structure
+		ZeroMemory(recvbuff, recvBuffsize); // Clear the receive buffer
+
+		int bytesIn = recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
+		if (bytesIn == SOCKET_ERROR)
+		{
+			std::cout << "Error receiving from client " << WSAGetLastError() << std::endl;
+			continue;
+		}
+
+		// Display message and client info
+		char clientIp[256]; // Create enough space to convert the address byte array
+		ZeroMemory(clientIp, 256); // to string of characters
+
+		// Convert from byte array to chars
+		inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
+
+		int prevBuffIndex = cBufindex - 1;
+		uint32_t frameCount = recvbuff[0];
+		uint32_t recvFragnum = recvbuff[1];
+		uint32_t isSingleFlag = recvbuff[2];
+		uint32_t pktsize = recvbuff[3];
+		if (debugFragments) {
+			std::cout << frameCount << "_";
+			std::cout << recvFragnum << "_";
+			std::cout << isSingleFlag << "_";
+			std::cout << pktsize << "_";
+			for (int i = 0; i < 10; i++) {
+				std::cout << recvbuff[i * 70];
+			}
+			std::cout << std::endl;
+			std::cout << "cBufindex: " << cBufindex;
+			std::cout << std::endl;
+		}
+		//Save Previous Frame
+		//Check if buffer is empty
+		if (recvFragnum == 0 && prevBuffIndex >= 0) {
+			bool prevsingle = buff[prevBuffIndex][2] == 1;
+			//Check if fragments in buffer are complete
+			bool buffComplete = true;
+			if (!prevsingle)
+				buffComplete = bufferIsComplete(buff, prevBuffIndex);
+			if (buffComplete) {
+				//BuildPacket
+				uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
+				//Save Screenshot
+				pkt->data = pktData;
+				pkt->size = buff[0][3];
+				int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename, false);
+				//decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
+				//Debug Frames
+				if (debugFrames) {
+					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
+					for (int i = 0; i < 10; i++) {
+						std::cout << pktData[i * 40] << " ";
+					}
+					std::cout << std::endl;
+				}
+			}
+			//Delete Buffer
+			delete[] buff;
+			buff = new uint32_t * [buffsize];
+			for (int i = 0; i < buffsize; ++i)
+				buff[i] = new uint32_t[recvBuffsize];
+			cBufindex = 0;
+		}
+
+		//Fill next Buffer	
+		for (int i = 0; i < recvBuffsize; i++) {
+			buff[cBufindex][i] = recvbuff[i];
+		}
+
+		//Increment Index
+		if (cBufindex < buffsize - 1)
+			cBufindex++;
+		else
+			cBufindex = 0;
+	} while (true);
 }
 
 void main()
@@ -510,102 +601,14 @@ void main()
 			//Event handler
 			SDL_Event e;
 
-			sockaddr_in client; // Use to hold the client information (port / ip address)
-			int clientLength = sizeof(client); // The size of the client information
-
-			bool debugFragments = false;
-			bool debugFrames = false;
-
-			int cBufindex = 0;
-			int buffsize = 20;
-			int recvBuffsize = 1400;
-			uint32_t recvbuff[1400];
-			uint32_t** buff = new uint32_t * [buffsize];
-			for (int i = 0; i < buffsize; ++i)
-				buff[i] = new uint32_t[recvBuffsize];
+			std::thread recvtask(recvtask);
 
 			std::future<int> fut;
 			// Enter a loop
 			while (!quit)
 			{
 				if (false) {
-					ZeroMemory(&client, clientLength); // Clear the client structure
-					ZeroMemory(recvbuff, recvBuffsize); // Clear the receive buffer
 
-					int bytesIn = recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
-					if (bytesIn == SOCKET_ERROR)
-					{
-						std::cout << "Error receiving from client " << WSAGetLastError() << std::endl;
-						continue;
-					}
-
-					// Display message and client info
-					char clientIp[256]; // Create enough space to convert the address byte array
-					ZeroMemory(clientIp, 256); // to string of characters
-
-					// Convert from byte array to chars
-					inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
-
-					int prevBuffIndex = cBufindex - 1;
-					uint32_t frameCount = recvbuff[0];
-					uint32_t recvFragnum = recvbuff[1];
-					uint32_t isSingleFlag = recvbuff[2];
-					uint32_t pktsize = recvbuff[3];
-					if (debugFragments) {
-						std::cout << frameCount << "_";
-						std::cout << recvFragnum << "_";
-						std::cout << isSingleFlag << "_";
-						std::cout << pktsize << "_";
-						for (int i = 0; i < 10; i++) {
-							std::cout << recvbuff[i * 70];
-						}
-						std::cout << std::endl;
-						std::cout << "cBufindex: " << cBufindex;
-						std::cout << std::endl;
-					}
-					//Save Previous Frame
-					//Check if buffer is empty
-					if (recvFragnum == 0 && prevBuffIndex >= 0) {
-						bool prevsingle = buff[prevBuffIndex][2] == 1;
-						//Check if fragments in buffer are complete
-						bool buffComplete = true;
-						if (!prevsingle)
-							buffComplete = bufferIsComplete(buff, prevBuffIndex);
-						if (buffComplete) {
-							//BuildPacket
-							uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
-							//Save Screenshot
-							pkt->data = pktData;
-							pkt->size = buff[0][3];
-							int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename, false);
-							//decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
-							//Debug Frames
-							if (debugFrames) {
-								std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
-								for (int i = 0; i < 10; i++) {
-									std::cout << pktData[i * 40] << " ";
-								}
-								std::cout << std::endl;
-							}
-						}
-						//Delete Buffer
-						delete[] buff;
-						buff = new uint32_t * [buffsize];
-						for (int i = 0; i < buffsize; ++i)
-							buff[i] = new uint32_t[recvBuffsize];
-						cBufindex = 0;
-					}
-
-					//Fill next Buffer	
-					for (int i = 0; i < recvBuffsize; i++) {
-						buff[cBufindex][i] = recvbuff[i];
-					}
-
-					//Increment Index
-					if (cBufindex < buffsize - 1)
-						cBufindex++;
-					else
-						cBufindex = 0;
 				}
 
 				//Handle events on queue
