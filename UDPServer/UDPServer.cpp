@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <thread>
+#include <future>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -55,6 +57,8 @@ AVFrame* avFrameYUV;
 AVFrame* avFrameRGB;
 AVPacket* pkt;
 SOCKET in;
+USHORT inPort = htons(54000);
+USHORT outPort = htons(54001);
 FILE* f;
 const char* filename = "\MPG4Video_highbitrate.mpg";
 
@@ -235,6 +239,29 @@ uint8_t* BuildPkt(uint32_t** buff, uint8_t crecvBufindex, uint32_t pktsize) {
 	return pktData;
 }
 
+void sendKey(uint32_t* key) {
+	// Create a hint structure for the server
+	sockaddr_in server;
+	server.sin_family = AF_INET; // AF_INET = IPv4 addresses
+	server.sin_port = outPort; // Little to big endian conversion
+	inet_pton(AF_INET, "127.0.0.1", &server.sin_addr); // Convert from string to byte array
+
+	// Socket creation, note that the socket type is datagram
+	SOCKET out = socket(AF_INET, SOCK_DGRAM, 0);
+
+	// Write out to that socket
+	int sendOk = sendto(out, (char*)key, sizeof(uint32_t) * 1, 0, (sockaddr*)&server, sizeof(server));
+
+
+	if (sendOk == SOCKET_ERROR)
+	{
+		std::cout << "That didn't work! " << WSAGetLastError() << std::endl;
+	}
+
+	// Close the socket
+	closesocket(out);
+}
+
 bool init()
 {
 	//Initialization flag
@@ -318,7 +345,7 @@ bool initClient() {
 	sockaddr_in serverHint;
 	serverHint.sin_addr.S_un.S_addr = ADDR_ANY; // Us any IP address available on the machine
 	serverHint.sin_family = AF_INET; // Address format is IPv4
-	serverHint.sin_port = htons(54000); // Convert from little to big endian
+	serverHint.sin_port = inPort; // Convert from little to big endian
 
 	// Try and bind the socket to the IP and port
 	if (bind(in, (sockaddr*)&serverHint, sizeof(serverHint)) == SOCKET_ERROR)
@@ -454,6 +481,11 @@ void close()
 	SDL_Quit();
 }
 
+int recvtask(uint32_t* recvbuff, int recvBuffsize, sockaddr_in client, int clientLength)
+{
+	return recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
+}
+
 void main()
 {
 	initClient();
@@ -492,87 +524,89 @@ void main()
 			for (int i = 0; i < buffsize; ++i)
 				buff[i] = new uint32_t[recvBuffsize];
 
+			std::future<int> fut;
 			// Enter a loop
 			while (!quit)
 			{
-				ZeroMemory(&client, clientLength); // Clear the client structure
-				ZeroMemory(recvbuff, recvBuffsize); // Clear the receive buffer
+				if (false) {
+					ZeroMemory(&client, clientLength); // Clear the client structure
+					ZeroMemory(recvbuff, recvBuffsize); // Clear the receive buffer
 
-				// Wait for message
-				int bytesIn = recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
-				if (bytesIn == SOCKET_ERROR)
-				{
-					std::cout << "Error receiving from client " << WSAGetLastError() << std::endl;
-					continue;
-				}
-
-				// Display message and client info
-				char clientIp[256]; // Create enough space to convert the address byte array
-				ZeroMemory(clientIp, 256); // to string of characters
-
-				// Convert from byte array to chars
-				inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
-
-				int prevBuffIndex = cBufindex - 1;
-				uint32_t frameCount = recvbuff[0];
-				uint32_t recvFragnum = recvbuff[1];
-				uint32_t isSingleFlag = recvbuff[2];
-				uint32_t pktsize = recvbuff[3];
-				if (debugFragments) {
-					std::cout << frameCount << "_";
-					std::cout << recvFragnum << "_";
-					std::cout << isSingleFlag << "_";
-					std::cout << pktsize << "_";
-					for (int i = 0; i < 10; i++) {
-						std::cout << recvbuff[i * 70];
+					int bytesIn = recvfrom(in, (char*)recvbuff, sizeof(uint32_t) * recvBuffsize, 0, (sockaddr*)&client, &clientLength);
+					if (bytesIn == SOCKET_ERROR)
+					{
+						std::cout << "Error receiving from client " << WSAGetLastError() << std::endl;
+						continue;
 					}
-					std::cout << std::endl;
-					std::cout << "cBufindex: " << cBufindex;
-					std::cout << std::endl;
-				}
-				//Save Previous Frame
-				//Check if buffer is empty
-				if (recvFragnum == 0 && prevBuffIndex >= 0) {
-					bool prevsingle = buff[prevBuffIndex][2] == 1;
-					//Check if fragments in buffer are complete
-					bool buffComplete = true;
-					if (!prevsingle)
-						buffComplete = bufferIsComplete(buff, prevBuffIndex);
-					if (buffComplete) {
-						//BuildPacket
-						uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
-						//Save Screenshot
-						pkt->data = pktData;
-						pkt->size = buff[0][3];
-						int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename, false);
-						//decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
-						//Debug Frames
-						if (debugFrames) {
-							std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
-							for (int i = 0; i < 10; i++) {
-								std::cout << pktData[i * 40] << " ";
-							}
-							std::cout << std::endl;
+
+					// Display message and client info
+					char clientIp[256]; // Create enough space to convert the address byte array
+					ZeroMemory(clientIp, 256); // to string of characters
+
+					// Convert from byte array to chars
+					inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
+
+					int prevBuffIndex = cBufindex - 1;
+					uint32_t frameCount = recvbuff[0];
+					uint32_t recvFragnum = recvbuff[1];
+					uint32_t isSingleFlag = recvbuff[2];
+					uint32_t pktsize = recvbuff[3];
+					if (debugFragments) {
+						std::cout << frameCount << "_";
+						std::cout << recvFragnum << "_";
+						std::cout << isSingleFlag << "_";
+						std::cout << pktsize << "_";
+						for (int i = 0; i < 10; i++) {
+							std::cout << recvbuff[i * 70];
 						}
+						std::cout << std::endl;
+						std::cout << "cBufindex: " << cBufindex;
+						std::cout << std::endl;
 					}
-					//Delete Buffer
-					delete[] buff;
-					buff = new uint32_t * [buffsize];
-					for (int i = 0; i < buffsize; ++i)
-						buff[i] = new uint32_t[recvBuffsize];
-					cBufindex = 0;
-				}
+					//Save Previous Frame
+					//Check if buffer is empty
+					if (recvFragnum == 0 && prevBuffIndex >= 0) {
+						bool prevsingle = buff[prevBuffIndex][2] == 1;
+						//Check if fragments in buffer are complete
+						bool buffComplete = true;
+						if (!prevsingle)
+							buffComplete = bufferIsComplete(buff, prevBuffIndex);
+						if (buffComplete) {
+							//BuildPacket
+							uint8_t* pktData = BuildPkt(buff, prevBuffIndex, buff[0][3]);
+							//Save Screenshot
+							pkt->data = pktData;
+							pkt->size = buff[0][3];
+							int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename, false);
+							//decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
+							//Debug Frames
+							if (debugFrames) {
+								std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
+								for (int i = 0; i < 10; i++) {
+									std::cout << pktData[i * 40] << " ";
+								}
+								std::cout << std::endl;
+							}
+						}
+						//Delete Buffer
+						delete[] buff;
+						buff = new uint32_t * [buffsize];
+						for (int i = 0; i < buffsize; ++i)
+							buff[i] = new uint32_t[recvBuffsize];
+						cBufindex = 0;
+					}
 
-				//Fill next Buffer	
-				for (int i = 0; i < recvBuffsize; i++) {
-					buff[cBufindex][i] = recvbuff[i];
-				}
+					//Fill next Buffer	
+					for (int i = 0; i < recvBuffsize; i++) {
+						buff[cBufindex][i] = recvbuff[i];
+					}
 
-				//Increment Index
-				if (cBufindex < buffsize - 1)
-					cBufindex++;
-				else
-					cBufindex = 0;
+					//Increment Index
+					if (cBufindex < buffsize - 1)
+						cBufindex++;
+					else
+						cBufindex = 0;
+				}
 
 				//Handle events on queue
 				while (SDL_PollEvent(&e) != 0)
@@ -585,19 +619,28 @@ void main()
 					//User presses a key
 					else if (e.type == SDL_KEYDOWN)
 					{
+						uint32_t arr[1];
 						//Select surfaces based on key press
 						switch (e.key.keysym.sym)
 						{
 						case SDLK_UP:
+							arr[0] = 0;
+							sendKey(arr);
 							break;
 
 						case SDLK_DOWN:
+							arr[0] = 1;
+							sendKey(arr);
 							break;
 
 						case SDLK_LEFT:
+							arr[0] = 2;
+							sendKey(arr);
 							break;
 
 						case SDLK_RIGHT:
+							arr[0] = 3;
+							sendKey(arr);
 							break;
 
 						default:
