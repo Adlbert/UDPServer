@@ -43,6 +43,24 @@ enum KeyPressSurfaces
 	KEY_PRESS_SURFACE_TOTAL
 };
 
+//The window we'll be rendering to
+SDL_Window* gWindow = NULL;
+
+//The surface contained by the window
+SDL_Surface* gScreenSurface = NULL;
+
+//The images that correspond to a keypress
+SDL_Surface* gKeyPressSurfaces[KEY_PRESS_SURFACE_TOTAL];
+
+//Current displayed image
+SDL_Surface* gCurrentSurface = NULL;
+
+//The window renderer
+SDL_Renderer* gRenderer = NULL;
+
+//Current displayed texture
+SDL_Texture* gTexture = NULL;
+
 /*save iamge data as pgm for tests
 */
 static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
@@ -60,7 +78,7 @@ static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
 
 /* decode from pkt of frame data
 */
-static void decodeToImage(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
+static int decodeToImage(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
 	AVFrame* avFrameYUV, AVFrame* avFrameRGB, AVPacket* pkt, const char* filename) {
 	char buf[1024];
 	int ret;
@@ -74,44 +92,52 @@ static void decodeToImage(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
 	while (ret >= 0) {
 		ret = avcodec_receive_frame(dec_ctx, avFrameYUV);
 		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-			return;
+			return -1;
 		else if (ret < 0) {
 			fprintf(stderr, "Error during decoding\n");
 			exit(1);
 		}
 
-		printf("saving frame %3d\n", dec_ctx->frame_number);
-		fflush(stdout);
+		SDL_Texture* bmp = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING, avFrameYUV->width, avFrameYUV->height);
+		int ret = SDL_UpdateYUVTexture(bmp, NULL, avFrameYUV->data[0], avFrameYUV->linesize[0], avFrameYUV->data[1], avFrameYUV->linesize[1], avFrameYUV->data[2], avFrameYUV->linesize[2]);
+		std::cout << ret << std::endl;
+			gTexture = bmp;
 
-		img_convert_ctx = sws_getContext(
-			avFrameYUV->width, avFrameYUV->height, dec_ctx->pix_fmt, avFrameYUV->width, avFrameYUV->height,
-			AVPixelFormat::AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
-		if (!img_convert_ctx) {
-			fprintf(stderr, "Could not allocate image convert context\n");
-			exit(1);
-		}
-		ret = av_image_alloc(avFrameRGB->data, avFrameRGB->linesize, avFrameYUV->width, avFrameYUV->height,
-			AVPixelFormat::AV_PIX_FMT_RGB24, 32);
-		if (ret < 0) {
-			fprintf(stderr, "Could not allocate raw picture buffer\n");
-			exit(6);
-		}
+		//printf("saving frame %3d\n", dec_ctx->frame_number);
+		//fflush(stdout);
 
-		int out = sws_scale(img_convert_ctx, avFrameYUV->data, avFrameYUV->linesize, 0, avFrameYUV->height,
-			avFrameRGB->data, avFrameRGB->linesize);
-		if (!out) {
-			AVERROR(ENOMEM);
-			exit(1);
-		}
+		//img_convert_ctx = sws_getContext(
+		//	avFrameYUV->width, avFrameYUV->height, dec_ctx->pix_fmt, avFrameYUV->width, avFrameYUV->height,
+		//	AVPixelFormat::AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+		//if (!img_convert_ctx) {
+		//	fprintf(stderr, "Could not allocate image convert context\n");
+		//	exit(1);
+		//}
+		//ret = av_image_alloc(avFrameRGB->data, avFrameRGB->linesize, avFrameYUV->width, avFrameYUV->height,
+		//	AVPixelFormat::AV_PIX_FMT_RGB24, 32);
+		//if (ret < 0) {
+		//	fprintf(stderr, "Could not allocate raw picture buffer\n");
+		//	exit(6);
+		//}
+
+		//int out = sws_scale(img_convert_ctx, avFrameYUV->data, avFrameYUV->linesize, 0, avFrameYUV->height,
+		//	avFrameRGB->data, avFrameRGB->linesize);
+		//if (!out) {
+		//	AVERROR(ENOMEM);
+		//	exit(1);
+		//}
+
 
 		/* the picture is allocated by the decoder. no need to
 		   free it */
-		snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.pgm", filename, dec_ctx->frame_number);
-		std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".jpg");
-		//stbi_write_png(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], avFrameRGB->linesize[0]);
-		stbi_write_jpg(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], 3 * avFrameYUV->width);
-		//pgm_save(avFrameRGB->data[0], avFrameRGB->linesize[0], avFrameYUV->width, avFrameYUV->height, filename);
+		   //snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.pgm", filename, dec_ctx->frame_number);
+		   //std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".png");
+		   //stbi_write_png(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], avFrameRGB->linesize[0]);
+		   //stbi_write_jpg(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], 3 * avFrameYUV->width);
+		   //pgm_save(avFrameRGB->data[0], avFrameRGB->linesize[0], avFrameYUV->width, avFrameYUV->height, filename);
+		return 0;
 	}
+	return -1;
 }
 
 static void decodeToVideo(AVPacket* pkt, const char* filename, int framenumber, FILE* f, bool debugframe) {
@@ -215,24 +241,6 @@ SOCKET in;
 FILE* f;
 const char* filename = "\MPG4Video_highbitrate.mpg";
 
-//The window we'll be rendering to
-SDL_Window* gWindow = NULL;
-
-//The surface contained by the window
-SDL_Surface* gScreenSurface = NULL;
-
-//The images that correspond to a keypress
-SDL_Surface* gKeyPressSurfaces[KEY_PRESS_SURFACE_TOTAL];
-
-//Current displayed image
-SDL_Surface* gCurrentSurface = NULL;
-
-//The window renderer
-SDL_Renderer* gRenderer = NULL;
-
-//Current displayed texture
-SDL_Texture* gTexture = NULL;
-
 bool init()
 {
 	//Initialization flag
@@ -259,7 +267,7 @@ bool init()
 		//	gScreenSurface = SDL_GetWindowSurface(gWindow);
 		//}
 
-				//Create window
+		//Create window
 		gWindow = SDL_CreateWindow("SDL Tutorial", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
 		if (gWindow == NULL)
 		{
@@ -269,7 +277,7 @@ bool init()
 		else
 		{
 			//Create renderer for window
-			gRenderer = SDL_CreateRenderer(gWindow, -1, SDL_RENDERER_ACCELERATED);
+			gRenderer = SDL_CreateRenderer(gWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
 			if (gRenderer == NULL)
 			{
 				printf("Renderer could not be created! SDL Error: %s\n", SDL_GetError());
@@ -283,7 +291,7 @@ bool init()
 				gScreenSurface = SDL_GetWindowSurface(gWindow);
 
 				//Initialize PNG loading
-				int imgFlags = IMG_INIT_PNG;
+				int imgFlags = IMG_INIT_PNG || IMG_INIT_JPG;
 				if (!(IMG_Init(imgFlags) & imgFlags))
 				{
 					printf("SDL_image could not initialize! SDL_image Error: %s\n", IMG_GetError());
@@ -405,7 +413,7 @@ bool initClient() {
 	return true;
 }
 
-SDL_Texture* loadTexture(std::string path)
+SDL_Texture* loadTextureFromFile(std::string path)
 {
 	//The final texture
 	SDL_Texture* newTexture = NULL;
@@ -429,6 +437,41 @@ SDL_Texture* loadTexture(std::string path)
 		SDL_FreeSurface(loadedSurface);
 	}
 
+	return newTexture;
+}
+
+SDL_Texture* loadTexture(AVFrame* avFrame, AVPixelFormat pix_fmt, int widht, int height)
+{
+
+	//The final textur#e
+	SDL_Texture* newTexture = NULL;
+	int size = avpicture_get_size(pix_fmt, widht, height);
+	unsigned char* buffer = new unsigned char[size];
+	int ret = avpicture_layout((AVPicture*)avFrame, pix_fmt, widht, height, buffer, size);
+	if (!ret) {
+		printf("Unable to load frame %s!avpicture_layout Error\n", avFrame->coded_picture_number);
+	}
+	else {
+		stbi_write_png("test.png", widht, height, 3, avFrame->data[0], avFrame->linesize[0]);
+		SDL_RWops* rw = SDL_RWFromMem(buffer, size);
+		SDL_Surface* loadedSurface = IMG_Load_RW(rw, 1);
+		if (loadedSurface == NULL)
+		{
+			printf("Unable to load frame %s! SDL_image Error: %s\n", avFrame->coded_picture_number, IMG_GetError());
+		}
+		else
+		{
+			//Create texture from surface pixels
+			newTexture = SDL_CreateTextureFromSurface(gRenderer, loadedSurface);
+			if (newTexture == NULL)
+			{
+				printf("Unable to create texture from frame %s! SDL Error: %s\n", avFrame->coded_picture_number, SDL_GetError());
+			}
+
+			//Get rid of old loaded surface
+			SDL_FreeSurface(loadedSurface);
+		}
+	}
 	return newTexture;
 }
 
@@ -467,7 +510,7 @@ bool loadMedia()
 	bool success = true;
 
 	//Load PNG texture
-	gTexture = loadTexture("texture.png");
+	gTexture = loadTextureFromFile("Frame1.jpg");
 	if (gTexture == NULL)
 	{
 		printf("Failed to load texture image!\n");
@@ -569,7 +612,7 @@ void main()
 			int clientLength = sizeof(client); // The size of the client information
 
 			bool debugFragments = false;
-			bool debugFrames = true;
+			bool debugFrames = false;
 
 			int cBufindex = 0;
 			int buffsize = 20;
@@ -631,8 +674,10 @@ void main()
 						//Save Screenshot
 						pkt->data = pktData;
 						pkt->size = buff[0][3];
-						//decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
-						decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
+						int ret = decodeToImage(image_ctx, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
+						//decodeToVideo(pkt, outfilename, image_ctx->frame_number, f, false);
+						//if (ret == 0)
+						//	gTexture = loadTexture(avFrameRGB, AVPixelFormat::AV_PIX_FMT_RGB24, 800, 600);
 						//Debug Frames
 						if (debugFrames) {
 							std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
