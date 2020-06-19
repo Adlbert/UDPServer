@@ -150,6 +150,7 @@ bool Client::bufferIsComplete(uint32_t** buff, uint8_t crecvBufindex) {
 		if (x != y)
 			return false;
 	}
+	delete[] fragNums;
 	return true;
 }
 
@@ -185,6 +186,7 @@ int Client::recvtask() {
 		// Convert from byte array to chars
 		inet_ntop(AF_INET, &client.sin_addr, clientIp, 256);
 
+		uint8_t* pktData;
 		int prevBuffIndex = cBufindex - 1;
 		uint32_t frameCount = recvbuff[0];
 		uint32_t recvFragnum = recvbuff[1];
@@ -212,7 +214,7 @@ int Client::recvtask() {
 				buffComplete = bufferIsComplete(buff, prevBuffIndex);
 			if (buffComplete) {
 				//BuildPacket
-				uint8_t* pktData = buildPkt(buff, prevBuffIndex, buff[0][3]);
+				pktData = buildPkt(buff, prevBuffIndex, buff[0][3]);
 				//Save Screenshot
 				pkt->data = pktData;
 				pkt->size = buff[0][3];
@@ -226,8 +228,11 @@ int Client::recvtask() {
 					}
 					std::cout << std::endl;
 				}
+				delete[] pktData;
 			}
 			//Delete Buffer
+			for (int i = 0; i < buffsize; ++i)
+				delete[] buff[i];
 			delete[] buff;
 			buff = new uint32_t * [buffsize];
 			for (int i = 0; i < buffsize; ++i)
@@ -243,8 +248,9 @@ int Client::recvtask() {
 		//Increment Index
 		if (cBufindex < buffsize - 1)
 			cBufindex++;
-		else
+		else {
 			cBufindex = 0;
+		}
 	} while (true);
 }
 

@@ -118,7 +118,7 @@ void MySDLEngine::run() {
 					client->sendKey(arr);
 					break;
 
-				default:
+				default:	
 					break;
 				}
 			}
