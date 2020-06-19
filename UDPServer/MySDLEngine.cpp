@@ -118,6 +118,11 @@ void MySDLEngine::run() {
 					client->sendKey(arr);
 					break;
 
+				case SDLK_r:
+					arr[0] = 6;
+					client->sendKey(arr);
+					break;
+
 				default:	
 					break;
 				}
