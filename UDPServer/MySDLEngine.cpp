@@ -88,23 +88,33 @@ void MySDLEngine::run() {
 				//Select surfaces based on key press
 				switch (e.key.keysym.sym)
 				{
-				case SDLK_UP:
+				case SDLK_w:
 					arr[0] = 0;
 					client->sendKey(arr);
 					break;
 
-				case SDLK_DOWN:
+				case SDLK_s:
 					arr[0] = 1;
 					client->sendKey(arr);
 					break;
 
-				case SDLK_LEFT:
+				case SDLK_a:
 					arr[0] = 2;
 					client->sendKey(arr);
 					break;
 
-				case SDLK_RIGHT:
+				case SDLK_d:
 					arr[0] = 3;
+					client->sendKey(arr);
+					break;
+
+				case SDLK_LEFT:
+					arr[0] = 4;
+					client->sendKey(arr);
+					break;
+
+				case SDLK_RIGHT:
+					arr[0] = 5;
 					client->sendKey(arr);
 					break;
 
