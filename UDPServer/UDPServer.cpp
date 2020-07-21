@@ -31,7 +31,7 @@ extern "C" {
 /*save iamge data as pgm for tests
 */
 static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
-	char* filename)
+	const char* filename)
 {
 	FILE* f;
 	int i;
@@ -45,7 +45,8 @@ static void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize,
 
 /* decode from pkt of frame data
 */
-static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const char* filename) {
+static void decode(AVCodecContext* dec_ctx, SwsContext* img_convert_ctx,
+	AVFrame* avFrameYUV, AVFrame* avFrameRGB, AVPacket* pkt, const char* filename) {
 	char buf[1024];
 	int ret;
 
@@ -56,7 +57,7 @@ static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const
 	}
 
 	while (ret >= 0) {
-		ret = avcodec_receive_frame(dec_ctx, frame);
+		ret = avcodec_receive_frame(dec_ctx, avFrameYUV);
 		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
 			return;
 		else if (ret < 0) {
@@ -67,11 +68,34 @@ static void decode(AVCodecContext* dec_ctx, AVFrame* frame, AVPacket* pkt, const
 		printf("saving frame %3d\n", dec_ctx->frame_number);
 		fflush(stdout);
 
+		img_convert_ctx = sws_getContext(
+			avFrameYUV->width, avFrameYUV->height, dec_ctx->pix_fmt, avFrameYUV->width, avFrameYUV->height,
+			AVPixelFormat::AV_PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+		if (!img_convert_ctx) {
+			fprintf(stderr, "Could not allocate image convert context\n");
+			exit(1);
+		}
+		ret = av_image_alloc(avFrameRGB->data, avFrameRGB->linesize, avFrameYUV->width, avFrameYUV->height,
+			AVPixelFormat::AV_PIX_FMT_RGB24, 32);
+		if (ret < 0) {
+			fprintf(stderr, "Could not allocate raw picture buffer\n");
+			exit(6);
+		}
+
+		int out = sws_scale(img_convert_ctx, avFrameYUV->data, avFrameYUV->linesize, 0, avFrameYUV->height,
+			avFrameRGB->data, avFrameRGB->linesize);
+		if (!out) {
+			AVERROR(ENOMEM);
+			exit(1);
+		}
+
 		/* the picture is allocated by the decoder. no need to
 		   free it */
-		snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.png", filename, dec_ctx->frame_number);
-		std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".png");
-		stbi_write_png(img_name.c_str(), frame->width, frame->height, 1, frame->data[0], frame->linesize[0]);
+		snprintf(buf, sizeof(buf), "media/screenshots/%s-%d.pgm", filename, dec_ctx->frame_number);
+		std::string img_name("media/screenshots/Frame" + std::to_string(dec_ctx->frame_number) + ".jpg");
+		//stbi_write_png(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], avFrameRGB->linesize[0]);
+		stbi_write_jpg(img_name.c_str(), avFrameYUV->width, avFrameYUV->height, 3, avFrameRGB->data[0], 3* avFrameYUV->width);
+		//pgm_save(avFrameRGB->data[0], avFrameRGB->linesize[0], avFrameYUV->width, avFrameYUV->height, filename);
 	}
 }
 
@@ -196,7 +220,9 @@ void main()
 	const char* outfilename;
 	const AVCodec* codec;
 	AVCodecContext* c = NULL;
-	AVFrame* frame;
+	SwsContext* img_convert_ctx = NULL;
+	AVFrame* avFrameYUV;
+	AVFrame* avFrameRGB;
 	AVPacket* pkt;
 
 	outfilename = "test";
@@ -230,11 +256,18 @@ void main()
 	}
 	c->width = 800;
 	c->height = 600;
+	c->pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
 
 
-	frame = av_frame_alloc();
-	if (!frame) {
+	avFrameYUV = av_frame_alloc();
+	if (!avFrameYUV) {
 		fprintf(stderr, "Could not allocate video frame\n");
+		exit(1);
+	}
+
+	avFrameRGB = av_frame_alloc();
+	if (!avFrameRGB) {
+		fprintf(stderr, "Could not allocate picture frame\n");
 		exit(1);
 	}
 
@@ -304,7 +337,7 @@ void main()
 				//Save Screenshot
 				pkt->data = pktData;
 				pkt->size = buff[0][3];
-				decode(c, frame, pkt, outfilename);
+				decode(c, img_convert_ctx, avFrameYUV, avFrameRGB, pkt, outfilename);
 				//Debug Frames
 				if (debugFrames) {
 					std::cout << std::endl << "Write frame " << buff[0][0] << " with packet size " << buff[0][3] << std::endl;
@@ -335,10 +368,11 @@ void main()
 	}
 
 	/* flush the decoder */
-	decode(c, frame, NULL, outfilename);
+	decode(c, img_convert_ctx, avFrameYUV, avFrameRGB, NULL, outfilename);
 
 	avcodec_free_context(&c);
-	av_frame_free(&frame);
+	av_frame_free(&avFrameYUV);
+	av_frame_free(&avFrameRGB);
 	av_packet_free(&pkt);
 
 	// Close socket
